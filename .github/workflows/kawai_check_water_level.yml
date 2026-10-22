@@ -2,10 +2,10 @@ name: Yamato river Kawai water level check
 
 on:
   schedule:
-    # 日本時間 7:00〜17:59 の間だけ、30分おきに実行する
+    # 日本時間 7:00〜17:59 の間だけ、10分おきに実行する
     # (cronはUTC基準。UTC 22:00-23:59 と 00:00-08:59 が JST 7:00-17:59 に相当)
-    - cron: "*/30 22-23 * * *"
-    - cron: "*/30 0-8 * * *"
+    - cron: "*/10 22-23 * * *"
+    - cron: "*/10 0-8 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -27,13 +27,10 @@ jobs:
       - name: Check water level
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          THRESHOLDS: "1.4,1.6,1.7,1.8"
+          THRESHOLDS: "0.8,0.9,1.0,1.1"
         run: python check_water_level.py
 
-      # 取得に失敗した観測所があっても、通知済みの記録は必ず保存する
-      # （保存されないと、成功した観測所の通知が毎回重複して届いてしまうため）
       - name: Commit updated state
-        if: always()
         run: |
           git config user.name "river-watch-bot"
           git config user.email "actions@users.noreply.github.com"
