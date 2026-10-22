@@ -27,7 +27,7 @@ jobs:
       - name: Check water level
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          THRESHOLDS: "0.8,0.9,1.0,1.1"
+          THRESHOLDS: "-0.8,-0.9,-1.0,-1.1"
         run: python check_water_level.py
 
       - name: Commit updated state
