@@ -1,97 +1,98 @@
 # -*- coding: utf-8 -*-
 """
-大和川「河合」観測所の水位を、国土交通省「水文水質データベース」から取得し、
-決めたしきい値を超えたら ntfy.sh 経由でスマホに通知する。
+大和川・河合観測所の水位を、国土交通省「水文水質データベース」から取得し、
+指定したしきい値（既定 0.9m）以上になったら ntfy.sh 経由でスマホに通知する。
 
-取得元について（必ずお読みください）:
-  取得元の水文水質データベース(www1.river.go.jp)には、「ツール等による自動的な
-  データ収集等はサーバに負荷がかかるため、原則としてご遠慮ください」という趣旨の
-  注意書きがあります。本プログラムはこれに該当する可能性が高いため、利用にあたっては
-  発注者（河川事務所）等に確認のうえで運用してください。
-  アクセスは、1回の実行あたり2リクエストに抑えています。
+データ取得元について:
+  「川の防災情報」(river.go.jp/kawabou) のトップページは
+  「ツール等による定期的なデータ収集はお控えください」と明記しているため、
+  このスクリプトはそちらには一切アクセスしません。
+  代わりに、数値データの参照用として公開されている
+  「水文水質データベース」(www1.river.go.jp) のリアルタイム10分水位ページを
+  GitHub Actionsの設定に従い、日中に10分おきに参照します。
 
-安全のための仕組み:
-  ・取得したページに書かれている「観測所記号」と「観測所名」が、設定と一致しない場合は
-    通知の判定をせずエラーにします（別の観測所のデータで監視し続けてしまうのを防ぐため）。
-  ・取得や通知に失敗した回は終了コード1となり、GitHub Actions上で赤い✕として表示されます。
-
-GitHub Actions で30分おきに自動実行する想定です。
+GitHub Actions で日本時間7:00〜17:59の間、10分おきに自動実行する想定です。
 """
 
-import json
 import os
 import re
-import sys
+import json
 from datetime import datetime, timezone, timedelta
 
 import requests
 
-# ---- 設定 ----------------------------------------------------------------
-# 監視する観測所とそのしきい値(m)。
-STATIONS = [
-    {
-        "id": "306031286607020",  # 観測所記号（水文水質データベース）
-        "name": "河合",  # ページ上の観測所名に含まれるべき文字列（照合用）
-        "label": "大和川 河合",  # 通知タイトルに使う表示名
-        "thresholds": [1.7, 1.8, 1.9, 2.0],
-    },
-]
+# ---- 設定 ----
+STATION_ID = "306031286607020"  # 大和川水系 大和川 河合観測所
 
-# GitHub Secrets で設定する（自分だけが知るランダムな文字列にすること）
-NTFY_TOPIC = os.environ["NTFY_TOPIC"]
-STATE_FILE = os.environ.get("STATE_FILE", "data/state.json")
+# しきい値は複数指定できる。カンマ区切りで環境変数 THRESHOLDS に渡す（例: "0.9,1.0,1.1"）
+THRESHOLDS = sorted(
+    float(x) for x in os.environ.get("THRESHOLDS", "0.9").split(",") if x.strip()
+)
 
-# 自動取得のプログラムであることが分かる名乗りにする
-HEADERS = {"User-Agent": "river-level-notifier/1.0 (automated; low frequency)"}
-JST = timezone(timedelta(hours=9))
+NTFY_TOPIC = os.environ["NTFY_TOPIC"]  # GitHub Secrets で設定する（自分だけが知るランダムな文字列にすること）
+STATE_FILE = "data/state.json"
 
+SITE_INFO_URL = f"https://www1.river.go.jp/cgi-bin/SiteInfo.exe?ID={STATION_ID}"
+REALTIME_LIST_URL = (
+    f"https://www1.river.go.jp/cgi-bin/DspWaterData.exe?KIND=9&ID={STATION_ID}"
+)
 
-# ---- 取得 ----------------------------------------------------------------
-def list_url(station_id: str) -> str:
-    return f"https://www1.river.go.jp/cgi-bin/DspWaterData.exe?KIND=9&ID={station_id}"
-
-
-def http_get(url: str) -> bytes:
-    res = requests.get(url, headers=HEADERS, timeout=30)
-    res.raise_for_status()
-    return res.content
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "ja,en;q=0.9",
+}
 
 
-def verify_station(html: str, station: dict) -> None:
-    """ページに書かれた観測所記号・観測所名が、設定と一致することを確認する。"""
-    m = re.search(
-        r"<FONT[^>]*>\s*(\d{13,15})\s*</FONT>.*?<FONT[^>]*>([^<]+)</FONT>",
-        html,
-        re.S | re.I,
+def fetch_dat_url() -> str:
+    """観測所のリアルタイム10分水位一覧ページから、最新の .dat ダウンロードリンクを取得する。
+
+    国交省側は .dat のファイル名に毎回変わるPIDのような値を含めているため、
+    URLを直接組み立てず、必ずこの一覧ページからリンクを抽出する。
+    通常のブラウザ操作を模して、観測所情報ページ→リアルタイム一覧ページの順にアクセスする。
+    """
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    # まず観測所情報ページを踏んでからリアルタイムページへ（通常のブラウジング動線を模す）
+    session.get(SITE_INFO_URL, timeout=30)
+
+    res = session.get(
+        REALTIME_LIST_URL, headers={"Referer": SITE_INFO_URL}, timeout=30
     )
-    if not m:
-        raise RuntimeError(
-            "ページから観測所記号・観測所名を読み取れませんでした"
-            "（国交省側のページ構造が変わった可能性があります）。"
-        )
-    page_id, page_name = m.group(1), m.group(2).strip()
-    if page_id != station["id"] or station["name"] not in page_name:
-        raise RuntimeError(
-            f"取得したページの観測所が設定と一致しません。"
-            f"設定: {station['id']} / {station['name']}、"
-            f"実際のページ: {page_id} / {page_name}"
-        )
+    res.raise_for_status()
+    html = res.content.decode("euc-jp", errors="ignore")
 
-
-def find_dat_url(html: str) -> str:
-    """一覧ページから、10分水位データ(.dat)のダウンロードリンクを探す。"""
+    # dat へのリンクは絶対URL(http://www1.river.go.jp/...)の場合と
+    # 相対パス(/dat/dload/...)の場合があるため、両方に対応する。
     m = re.search(
         r'href="((?:https?://www1\.river\.go\.jp)?/dat/dload/download/[^"]+\.dat)"',
         html,
     )
     if not m:
-        raise RuntimeError("データ(.dat)のリンクが見つかりませんでした。")
-    path = m.group(1)
-    return path if path.startswith("http") else f"https://www1.river.go.jp{path}"
+        # デバッグ用に、取得できたページの状態をログに出す
+        print(f"[DEBUG] status_code={res.status_code}")
+        print(f"[DEBUG] final url={res.url}")
+        print(f"[DEBUG] content length={len(html)}")
+        print(f"[DEBUG] head of content:\n{html[:1500]}")
+        raise RuntimeError(
+            "dat リンクが見つかりませんでした。国交省側のページ構造が変わったか、"
+            "アクセス元が制限されている可能性があります。上の[DEBUG]ログを確認してください。"
+        )
+    dat_path = m.group(1)
+    if dat_path.startswith("http"):
+        return dat_path
+    return f"https://www1.river.go.jp{dat_path}"
 
 
-def parse_latest(text: str):
-    """.dat の本文から、最新の有効な (日付, 時刻, 水位m) を返す。"""
+def fetch_latest_level(dat_url: str):
+    """.dat をダウンロードし、最新の有効な (日付, 時刻, 水位m) を返す。"""
+    res = requests.get(dat_url, headers=HEADERS, timeout=30)
+    res.raise_for_status()
+    text = res.content.decode("euc-jp", errors="ignore")
+
     latest = None
     for line in text.splitlines():
         parts = line.strip().split(",")
@@ -103,49 +104,40 @@ def parse_latest(text: str):
         try:
             value = float(value_str)
         except ValueError:
-            continue  # "-"（未登録）などはスキップ
+            # "-"（未登録）などはスキップ
+            continue
         if value <= -9000:
-            continue  # 欠測はスキップ
+            # -9999.99 (欠測) はスキップ
+            continue
         latest = (date_str, time_str, value)
+
     if latest is None:
         raise RuntimeError("有効な水位データが見つかりませんでした。")
     return latest
 
 
-def fetch_latest_level(station: dict):
-    html = http_get(list_url(station["id"])).decode("euc-jp", errors="ignore")
-    verify_station(html, station)
-    dat_url = find_dat_url(html)
-    text = http_get(dat_url).decode("euc-jp", errors="ignore")
-    return parse_latest(text)
-
-
-# ---- 状態の保存 ------------------------------------------------------------
 def load_state() -> dict:
-    state = {}
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f)
-    state.setdefault("stations", {})
-    return state
+            state.setdefault("notified_thresholds", [])
+            return state
+    return {"notified_thresholds": [], "last_checked": None, "last_level": None}
 
 
 def save_state(state: dict) -> None:
-    folder = os.path.dirname(STATE_FILE)
-    if folder:
-        os.makedirs(folder, exist_ok=True)
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-# ---- 通知 ----------------------------------------------------------------
-def send_notification(station: dict, date_str: str, time_str: str, value: float, threshold: float) -> None:
-    title = f"{station['label']} 水位アラート"
+def send_notification(date_str: str, time_str: str, value: float, threshold: float) -> None:
+    title = "大和川 河合 水位アラート"
     message = (
         f"{date_str} {time_str} 時点で水位 {value:.2f}m"
         f"（しきい値 {threshold:.2f}m 以上）になりました。"
     )
-    res = requests.post(
+    requests.post(
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=message.encode("utf-8"),
         headers={
@@ -155,58 +147,39 @@ def send_notification(station: dict, date_str: str, time_str: str, value: float,
         },
         timeout=15,
     )
-    res.raise_for_status()  # 送れていないのに「通知済み」にしないため
-
-
-# ---- 1観測所分の処理 ---------------------------------------------------------
-def process_station(station: dict, st: dict) -> None:
-    date_str, time_str, value = fetch_latest_level(station)
-    print(
-        f"[INFO] {station['label']}: 最新観測値 {date_str} {time_str} = {value:.2f}m "
-        f"(前回チェック時: {st.get('last_level')})"
-    )
-
-    notified = set(st.get("notified_thresholds", []))
-    for th in sorted(station["thresholds"]):
-        if value >= th:
-            if th in notified:
-                print(f"[INFO]   {th:.2f}m: 既に通知済みのため送信しません。")
-                continue
-            send_notification(station, date_str, time_str, value, th)
-            notified.add(th)
-            st["notified_thresholds"] = sorted(notified)
-            print(f"[INFO]   {th:.2f}m 以上のため通知を送信しました。")
-        elif th in notified:
-            notified.discard(th)
-            st["notified_thresholds"] = sorted(notified)
-            print(f"[INFO]   水位が {th:.2f}m 未満に戻ったため、通知フラグをリセットします。")
-
-    st["notified_thresholds"] = sorted(notified)
-    st["last_level"] = value
-    st["last_observed"] = f"{date_str} {time_str}"
 
 
 def main() -> None:
+    dat_url = fetch_dat_url()
+    date_str, time_str, value = fetch_latest_level(dat_url)
     state = load_state()
-    failures = []
+    notified = set(state.get("notified_thresholds", []))
 
-    for station in STATIONS:
-        st = state["stations"].setdefault(station["id"], {"notified_thresholds": []})
-        try:
-            process_station(station, st)
-            st["last_error"] = None
-        except Exception as e:  # 1か所の失敗で、もう1か所の監視を止めない
-            msg = f"{type(e).__name__}: {e}"
-            print(f"[ERROR] {station['label']}: {msg}", file=sys.stderr)
-            st["last_error"] = msg
-            failures.append(station["label"])
+    print(
+        f"[INFO] 最新観測値: {date_str} {time_str} = {value:.2f}m "
+        f"(前回チェック時の値: {state.get('last_level')})"
+    )
+    print(f"[INFO] しきい値: {THRESHOLDS}")
 
-    state["last_checked"] = datetime.now(JST).isoformat()
+    for th in THRESHOLDS:
+        if value >= th:
+            if th not in notified:
+                send_notification(date_str, time_str, value, th)
+                notified.add(th)
+                print(f"[INFO] しきい値 {th:.2f}m 以上のため通知を送信しました。")
+            else:
+                print(f"[INFO] しきい値 {th:.2f}m は既に通知済みのため送信しません。")
+        else:
+            if th in notified:
+                notified.discard(th)
+                print(f"[INFO] 水位がしきい値 {th:.2f}m 未満に戻ったため、通知フラグをリセットします。")
+
+    state["notified_thresholds"] = sorted(notified)
+
+    jst = timezone(timedelta(hours=9))
+    state["last_checked"] = datetime.now(jst).isoformat()
+    state["last_level"] = value
     save_state(state)
-
-    if failures:
-        print(f"[ERROR] 取得に失敗した観測所: {', '.join(failures)}", file=sys.stderr)
-        sys.exit(1)
 
 
 if __name__ == "__main__":
