@@ -27,7 +27,7 @@ jobs:
       - name: Check water level
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          THRESHOLDS: "1.5,1.6,1.7,1.8"
+          THRESHOLDS: "1.4,1.6,1.7,1.8"
         run: python check_water_level.py
 
       # 取得に失敗した観測所があっても、通知済みの記録は必ず保存する
