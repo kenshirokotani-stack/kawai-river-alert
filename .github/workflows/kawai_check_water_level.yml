@@ -4,8 +4,7 @@ on:
   schedule:
     # 日本時間 7:00〜17:59 の間だけ、30分おきに実行する
     # (cronはUTC基準。UTC 22:00-23:59 と 00:00-08:59 が JST 7:00-17:59 に相当)
-    - cron: "*/10 22-23 * * *"
-    - cron: "*/10 0-8 * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch: {}
 
 permissions:
