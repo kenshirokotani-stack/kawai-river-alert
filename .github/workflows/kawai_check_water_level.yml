@@ -1,11 +1,16 @@
-name: Yamato river Fujii water level check
+name: Yamato river Kawai water level check
 
 on:
   schedule:
-    # 日本時間 7:00〜17:59 の間だけ、30分おきに実行する
-    # (cronはUTC基準。UTC 22:00-23:59 と 00:00-08:59 が JST 7:00-17:59 に相当)
-    - cron: "*/3,13,23,33,43,53 * * * *"
+    # 24時間・毎日、10分おきに実行する（cronはUTC基準だが、全時間帯なので時差の影響なし）
+    # 混雑しやすい0分・30分を避け、3分・13分…とずらしている
+    - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch: {}
+
+# 実行が重なっても順番に処理する（state.json の保存が衝突しないように）
+concurrency:
+  group: check-water-level
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -29,7 +34,9 @@ jobs:
           THRESHOLDS: "-1.3,-1.2,-1.1,-1.0"
         run: python check_water_level.py
 
+      # 取得に失敗した回でも、通知済みの記録は必ず保存する
       - name: Commit updated state
+        if: always()
         run: |
           git config user.name "river-watch-bot"
           git config user.email "actions@users.noreply.github.com"
