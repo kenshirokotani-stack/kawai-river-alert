@@ -7,7 +7,7 @@
       "last_error": null
     }
   },
-  "last_checked": "2026-10-27T12:30:43.082210+09:00",
+  "last_checked": "2026-10-27T12:40:31.843718+09:00",
   "notified_thresholds": [
     -1.7,
     -1.6,
@@ -17,5 +17,5 @@
     -1.1,
     -1.0
   ],
-  "last_level": -0.99
+  "last_level": -1.0
 }
