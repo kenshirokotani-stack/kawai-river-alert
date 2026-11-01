@@ -7,11 +7,11 @@
       "last_error": null
     }
   },
-  "last_checked": "2026-11-02T01:28:07.517875+09:00",
+  "last_checked": "2026-11-02T01:30:43.077542+09:00",
   "notified_thresholds": [
     -1.7,
     -1.6,
     -1.5
   ],
-  "last_level": -1.42
+  "last_level": -1.41
 }
