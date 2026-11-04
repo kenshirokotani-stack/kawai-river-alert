@@ -1,10 +1,10 @@
+# 河合用（.github/workflows/kawai_check_water_level.yml）
 name: Yamato river Kawai water level check
 
+# 実行のタイミングは、外部の定時起動サービス（cron-job.org）から指示する。
+# （毎日 7:50〜17:10 の10分おき。GitHub側の定期実行は使わない）
+# 手動で動かしたいときは、Actionsタブの「Run workflow」から実行できる。
 on:
-  schedule:
-    # 24時間・毎日、10分おきに実行する（cronはUTC基準だが、全時間帯なので時差の影響なし）
-    # 混雑しやすい0分・30分を避け、3分・13分…とずらしている
-    - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch: {}
 
 # 実行が重なっても順番に処理する（state.json の保存が衝突しないように）
